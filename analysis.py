@@ -1,121 +1,119 @@
+import sys
 import csv
 import datetime as dt
 import matplotlib
 matplotlib.rcParams['backend'] = "Qt4Agg"
 import matplotlib.pyplot as plt
 import math
-import numpy
+import numpy as np
+import padasip as pa
 import pandas as pd
 
-def bk(k, f_dn, f_up):
-    a = 2 * math.pi / f_up
-    b = 2 * math.pi / f_dn
-    print 'a: ', a, ', b: ', b
-    ak_z = [(b-a)/math.pi]
-    ak_1k= [ (math.sin(i*b) - math.sin(i*a))/i/math.pi for i in range(1, k+1)]
-    ak = ak_z + ak_1k
-    theta = (1-(ak_z[0] + 2*sum(ak_1k))) / (2*k + 1)
-    print 'theta: ',theta
-    ak_c = map(lambda x: x + theta, ak)
-    ak_f = list(reversed(ak_c[1:])) + [ak_c[0]] + ak_c[1:]
-    print "sum(ak): ", sum(ak_f)
-    return ak_f
+def predictor2(x, delay=2, order=3, mu=.98, eps=0.1):
+    xd=np.pad(x, (delay, 0), mode='constant')[:len(x)]
+    yd=np.zeros(len(x))
+    y=np.zeros(len(x)+delay)
+    e=np.zeros(len(x))
+    n=order+1
+    #f1=pa.filters.FilterNLMS(n, mu=mu, w='zeros')
+    f1=pa.filters.rls.FilterRLS(n, mu=mu, eps=eps, w='zeros')
+    for k in range(order, len(x)):
+        a = xd[k-order:k+1]
+        y[k] = f1.predict(a)
+        f1.adapt(x[k], a)
+    return xd, y, yd, e
 
-def bk_low(k, f_dn):
-    b = 2 * math.pi / f_dn
-    print 'b: ', b
-    ak_z = [(b)/math.pi]
-    ak_1k= [ (math.sin(i*b))/i/math.pi for i in range(1, k+1)]
-    ak = ak_z + ak_1k
-    theta = (1-(ak_z[0] + 2*sum(ak_1k))) / (2*k + 1)
-    print 'theta: ',theta
-    ak_c = map(lambda x: x + theta, ak)
-    ak_f = list(reversed(ak_c[1:])) + [ak_c[0]] + ak_c[1:]
-    print "sum(ak): ", sum(ak_f)
-    return ak_f
-
-
-def bk_filter(x, ak):
-    k = (len(ak)-1)/2
-    y = [0 for i in range(k)]
-    y += [numpy.sum(numpy.array(x[i-k:i+k+1])*numpy.array(ak)) for i in range(k, len(x)-k)]
-    y += [0 for i in range(k)]
-    return y
-
-# Return a ndarray with filtered data
-def np_bkf(x, ak):
-    #k = (len(ak)-1)/2
-    #f = pd.Series(0, index=x.index)
-    #for i in range(k, len(x) - k):
-    #    f.iloc[i] = (x.iloc[i-k:i+k+1]['Bid']*ak).sum()
-    #return f
-    # Full convolution is correct in [(len(ak)-1)/2:-(len(ak)-1)/2] interval
-    return numpy.convolve(x, ak)
-
-# Prova a fare una predizione per evitare lo sfasamento:
-#i dati futuri sono tutti uguali a 0
-def bk_filter_2(x, ak):
-    k = (len(ak)-1)/2
-    #y = [0 for i in range(k)]
-    #y += [numpy.sum(numpy.array(x[i-k:i+1])*numpy.array(ak[0:k+1])*2) for i in range(k, len(x))]
-    #y += [0 for i in range(k)]
-
-    aak=numpy.concatenate([2*numpy.array(ak[0:k]),ak[k:k+1]])
-    # Coeff needs to be swapped, because they are swapped by convolution
-    y = numpy.convolve(x, numpy.flipud(aak))
-    return y
-
-# Read data from tick file and return a Pandas DF
-def df_from_tick(data_file=None):
-    #data_file='/home/rek/shared/TickData_EURGBPecn_2016919_1037.csv'
-    #data_file='/home/rek/shared/TickData_EURGBPecn_2016919_1428.csv'
-    #data_file='/home/rek/shared/TickData_EURGBPecn_2016927_1915.csv'
-    if data_file == None:
-        data_file='data/TickData_EURGBPecn_2016929_1740.csv'
-    df = pd.read_csv(data_file, names=['Date', 'Bid', 'Ask'], index_col=[0], parse_dates=True)
-    # Aggregate data with same index
-    df2=df.groupby(df.index).mean()
-    return df2
-
-def run_adaptive(s=None, order=3, delay=2):
-	if s is None:
-		s=numpy.array([numpy.sin(2*numpy.pi*t/100) for t in range(1000)])
-	a=numpy.zeros(len(s)+delay)
-	filt=pa.filters.FilterNLMS(order, mu=.98)
-	for k in range(delay+order-1:len(s)):
-		x=s[k-order+1:k+1]  #Input to predictor: last 'order' samples
-		a[k+delay]=filt.predict(x)
-		#Adapt filter coefficients giving input data who contributed to produce s[k]
-		filt.adapt(s[k], s[k-delay-order+1:k-delay+1])
-	return a
+def predictor(x, delay=2, order=3, mu=.98):
+    xd=np.pad(x, (delay, 0), mode='constant')[:len(x)]
+    yd=np.zeros(len(x))
+    y=np.zeros(len(x))
+    e=np.zeros(len(x))
+    n=order+1
+    f1=pa.filters.FilterNLMS(n, mu=mu, w='zeros', eps=0.1)
+    for k in range(order, len(x)):
+        a = xd[k-order:k+1]
+        yd[k] = f1.predict(a)
+        y[k] = np.dot(f1.w, x[k-order:k+1])
+        f1.adapt(x[k], a)
+    return xd, y, yd, e
 
 if __name__ == "__main__":
-    c_pad=bk_low(14400, 14400)
-    bid_f_pad=bk_filter_2(bid_v,c_pad)
-    plt.plot(bid_v, 'b', bid_f_pad, 'g')
-    plt.show()
-    simulate(bid_v[1500:], bid_f_pad[1500:], 2)
+    data = []
+    #with open('data/DAT_ASCII_EURGBP_M1_201605.csv') as csvfile:
+    with open('data/TickData_EURGBPecn_2016929_1740.csv') as csvfile:
+        reader = csv.reader(csvfile, delimiter=',')
+        for row in reader:
+            data.append(float(row[1]))
 
-    spread_v = [(ask_v[i]-bid_v[i])*10000 for i in range(0,len(bid_v))]
-    c120=bk(120,3600,36000)
-    c480=bk(480,3600,3600000)
-    bid_f_120=bk_filter(bid_v,c120)
-    bid_f_480=bk_filter(bid_v,c480)
-    bid_f_480_2=bk_filter_2(bid_v,c480)
-    delta=bid_v[600]-bid_f_120[600]
-    bid_c_120 = map(lambda x: x+delta, bid_f_120)
-    delta=bid_v[600]-bid_f_480[600]
-    bid_c_480 = map(lambda x: x+delta, bid_f_480)
-    delta=bid_v[600]-bid_f_480_2[600]
-    bid_c_480_2 = map(lambda x: x+delta, bid_f_480_2)
-    plt.subplot(211)
-    plt.plot(bid_v[500:-500], 'r', bid_c_120[500:-500], 'g', bid_c_480[500:-500], 'b', bid_c_480_2[500:-500], 'y')
-    #Shift a destra della dimensione del campione, per valutare lo sfasamento
-    plt.subplot(212)
-    bid_s_c_120 = bid_c_120[-120:]+bid_c_120[:-120]
-    bid_s_c_480 = bid_c_480[-480:]+bid_c_480[:-480]
-    plt.plot(bid_v[1000:], 'r', bid_s_c_120[1000:], 'g', bid_s_c_480[1000:], 'b')
+    N = 1000
+    n = 15
+    u = 0.5 * np.sin(np.arange(0, N/10., N/10000.))
+    v = np.random.random(N)
+    x = u + v
+
+    # x = np.linspace(-np.pi, np.pi, 201)
+    # x = np.array(data)
+
+    mu=0.98
+    delay=10
+    order=100
+    # for mu in (0.1, 0.5, 0.98):
+    xd, y, yd, e = predictor(x, mu=mu, order=order, delay=delay)
+
+    #c = np.correlate(x, y, "full")
+
+    #plt.subplot(211)
+    #plt.plot(x[-view:], '.--', color='black')
+    #plt.plot(xd[-view-delay:], '.-', color='red')
+    #plt.plot(yd[-view-delay:], '.-', color='green')
+    #plt.plot(y[-view+delay:], '.--', color='blue')
+
+    k=np.arange(800,1000)
+
+    plt.plot(k, x[k], '.--', color='black', label='x')
+    # plt.plot(k, xd[k], '.-', color='red', label='xd')
+    #plt.plot(yd, '.-', color='green', label='yd')
+    plt.plot(k, y[k], '.-', color='blue')
+
+    #plt.subplot(212)
+    #plt.xcorr(x, y[:len(x)])
+    #n = len(y)
+    #Y = np.fft.fft(y[k])
+    #plt.plot(abs(Y[1:100]), 'r.-')
+    #plt.plot(y, 'r.-')
+    #plt.plot(yd, 'g.-')
+    #lt.subplot(212)
+    #plt.plot(c[-view:], 'b.-')
+    plt.legend()
     plt.show()
+
+
+    # c_pad=bk_low(14400, 14400)
+    # bid_f_pad=bk_filter_2(bid_v,c_pad)
+    # plt.plot(bid_v, 'b', bid_f_pad, 'g')
+    # plt.show()
+    # simulate(bid_v[1500:], bid_f_pad[1500:], 2)
+    # 
+    # spread_v = [(ask_v[i]-bid_v[i])*10000 for i in range(0,len(bid_v))]
+    # c120=bk(120,3600,36000)
+    # c480=bk(480,3600,3600000)
+    # bid_f_120=bk_filter(bid_v,c120)
+    # bid_f_480=bk_filter(bid_v,c480)
+    # bid_f_480_2=bk_filter_2(bid_v,c480)
+    # delta=bid_v[600]-bid_f_120[600]
+    # bid_c_120 = map(lambda x: x+delta, bid_f_120)
+    # delta=bid_v[600]-bid_f_480[600]
+    # bid_c_480 = map(lambda x: x+delta, bid_f_480)
+    # delta=bid_v[600]-bid_f_480_2[600]
+    # bid_c_480_2 = map(lambda x: x+delta, bid_f_480_2)
+    # plt.subplot(211)
+    # plt.plot(bid_v[500:-500], 'r', bid_c_120[500:-500], 'g', bid_c_480[500:-500], 'b', bid_c_480_2[500:-500], 'y')
+    # #Shift a destra della dimensione del campione, per valutare lo sfasamento
+    # plt.subplot(212)
+    # bid_s_c_120 = bid_c_120[-120:]+bid_c_120[:-120]
+    # bid_s_c_480 = bid_c_480[-480:]+bid_c_480[:-480]
+    # plt.plot(bid_v[1000:], 'r', bid_s_c_120[1000:], 'g', bid_s_c_480[1000:], 'b')
+    # plt.show()
 
 
 
